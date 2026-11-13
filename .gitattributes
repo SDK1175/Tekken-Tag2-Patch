@@ -1,0 +1,3 @@
+# 패치 파일은 CRLF가 섞인 원본 바이트 그대로 보존해야 git am --keep-cr이 통과함
+*.patch -text
+r20-data/** -text

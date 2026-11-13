@@ -1,0 +1,103 @@
+From 2d9be47cf753e930031ebaf301e50f086ab38949 Mon Sep 17 00:00:00 2001
+From: tag2-port <tag2@local>
+Date: Fri, 13 Nov 2026 13:23:01 +0900
+Subject: [PATCH 2/5] Tag2: adapt to current master (overlay set_font API,
+ persistent VK pipeline cache into pipe compiler, portability fixes)
+
+- set_font(name,size) -> set_font(size,name) for upstream overlay API change
+- feed render_device persistent pipeline cache into upstream shared pipe compiler cache (not destroyed twice)
+- hex literal pp-number fixes (0x1e+x) for GCC/Clang
+- -fexceptions for SPIRVCommon.cpp / vkutils/device.cpp in CMake (matches vcxproj)
+- ggpo platform_windows.h: include mmsystem.h for timeGetTime under WIN32_LEAN_AND_MEAN
+---
+ 3rdparty/ggpo_sync/src/lib/ggpo/platform_windows.h | 1 +
+ rpcs3/Emu/CMakeLists.txt                           | 2 +-
+ rpcs3/Emu/Cell/TTT2LobbySnapshot.h                 | 4 ++--
+ rpcs3/Emu/Cell/green_rollback_native.h             | 2 +-
+ rpcs3/Emu/ttt2_framedata.h                         | 2 +-
+ rpcs3/rpcs3qt/tag2_lobby_overlay.h                 | 2 +-
+ 6 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/3rdparty/ggpo_sync/src/lib/ggpo/platform_windows.h b/3rdparty/ggpo_sync/src/lib/ggpo/platform_windows.h
+index 1d308ceb0..aaaedc4b6 100644
+--- a/3rdparty/ggpo_sync/src/lib/ggpo/platform_windows.h
++++ b/3rdparty/ggpo_sync/src/lib/ggpo/platform_windows.h
+@@ -11,6 +11,7 @@
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+ #include <windows.h>
++#include <mmsystem.h> // timeGetTime (not pulled in under WIN32_LEAN_AND_MEAN)
+ #include <stdio.h>
+ #include "types.h"
+ 
+diff --git a/rpcs3/Emu/CMakeLists.txt b/rpcs3/Emu/CMakeLists.txt
+index 6f583bfde..d9f6133b6 100644
+--- a/rpcs3/Emu/CMakeLists.txt
++++ b/rpcs3/Emu/CMakeLists.txt
+@@ -108,7 +108,7 @@ set_source_files_properties("../../Utilities/JITLLVM.cpp" "../../Utilities/JITAS
+     SKIP_PRECOMPILE_HEADERS ON
+ )
+ 
+-set_source_files_properties("../util/yaml.cpp" "Cell/GreenGGPOHost.cpp" "Cell/GreenGGPO.cpp" "Cell/TTT2LobbyPass.cpp" "ttt2_framedata.cpp" PROPERTIES
++set_source_files_properties("../util/yaml.cpp" "Cell/GreenGGPOHost.cpp" "Cell/GreenGGPO.cpp" "Cell/TTT2LobbyPass.cpp" "ttt2_framedata.cpp" "RSX/Program/SPIRVCommon.cpp" "RSX/VK/vkutils/device.cpp" PROPERTIES
+     COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/EHsc,-fexceptions>"
+     SKIP_PRECOMPILE_HEADERS ON
+ )
+diff --git a/rpcs3/Emu/Cell/TTT2LobbySnapshot.h b/rpcs3/Emu/Cell/TTT2LobbySnapshot.h
+index 6c37c31cb..4afc3be0a 100644
+--- a/rpcs3/Emu/Cell/TTT2LobbySnapshot.h
++++ b/rpcs3/Emu/Cell/TTT2LobbySnapshot.h
+@@ -10,9 +10,9 @@ inline std::optional<snapshot> read_room_snapshot(std::span<const std::uint8_t>
+   const auto member=0x14+i*0x6c;
+   if(data[member+4]){
+    if(get(member,4)!=i)return {};out.active|=1U<<i;if(data[member+0x14])out.ready|=1U<<i;
+-   unsigned length=0;while(length<17&&data[member+0x1e+length])++length;
++   unsigned length=0;while(length<17&&data[member+0x1e +length])++length;
+    if(!length||length==17)return {};
+-   for(unsigned j=0;j<length;++j)out.accounts[i][j]=static_cast<char>(data[member+0x1e+j]);
++   for(unsigned j=0;j<length;++j)out.accounts[i][j]=static_cast<char>(data[member+0x1e +j]);
+   }
+  }
+  if(!valid_snapshot(out)||static_cast<std::int32_t>(get(0x29c,4))!=out.queue[0]||static_cast<std::int32_t>(get(0x2a0,4))!=out.queue[1])return {};
+diff --git a/rpcs3/Emu/Cell/green_rollback_native.h b/rpcs3/Emu/Cell/green_rollback_native.h
+index ab77c096f..f385c54f2 100644
+--- a/rpcs3/Emu/Cell/green_rollback_native.h
++++ b/rpcs3/Emu/Cell/green_rollback_native.h
+@@ -234,7 +234,7 @@ struct inspector
+         const auto b=battle(),mode=word(add(b,0x1c0));
+         // 172668 chooses a different, lazily constructed owner in modes 7/15.
+         if(mode==7||mode==15){fail(status::unsupported_getter,0x00172668);return false;}
+-        const auto at=0x016a5c8c+0x10+side*0xfe+0x4c;
++        const auto at=0x016a5c8c+0x10+side*0xfe +0x4c;
+         return (std::uint16_t(byte(at,true))<<8|byte(at+1,true))==3;
+     }
+     std::uint32_t extra_actor(std::uint32_t index)
+diff --git a/rpcs3/Emu/ttt2_framedata.h b/rpcs3/Emu/ttt2_framedata.h
+index 5b2b81642..bf48dc918 100644
+--- a/rpcs3/Emu/ttt2_framedata.h
++++ b/rpcs3/Emu/ttt2_framedata.h
+@@ -125,7 +125,7 @@ namespace ttt2_framedata
+                     auto setup=[&](rsx::overlays::label& item,bool value)
+                     {
+                         item.set_padding(0);
+-                        item.set_font("ttt2-hud-malgunbd.ttf",18);
++                        item.set_font(18, "ttt2-hud-malgunbd.ttf");
+                         item.align_text(value?rsx::overlays::overlay_element::text_align::right:rsx::overlays::overlay_element::text_align::left);
+                         item.set_wrap_text(false);
+                         item.fore_color=value?color4f{1.f,1.f,1.f,1.f}
+diff --git a/rpcs3/rpcs3qt/tag2_lobby_overlay.h b/rpcs3/rpcs3qt/tag2_lobby_overlay.h
+index 1a61acbe7..febeb58c5 100644
+--- a/rpcs3/rpcs3qt/tag2_lobby_overlay.h
++++ b/rpcs3/rpcs3qt/tag2_lobby_overlay.h
+@@ -17,7 +17,7 @@ public:
+   label_.set_pos(100,24);
+   label_.set_size(1080,112);
+   label_.set_padding(14,14,10,10);
+-  label_.set_font("ttt2-hud-malgunbd.ttf",16);
++  label_.set_font(16, "ttt2-hud-malgunbd.ttf");
+   label_.set_wrap_text(true);
+   label_.fore_color={1.f,0.96f,0.8f,1.f};
+   label_.back_color={0.06f,0.09f,0.15f,0.94f};
+-- 
+2.43.0
+

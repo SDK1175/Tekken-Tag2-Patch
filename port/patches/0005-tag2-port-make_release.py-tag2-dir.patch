@@ -1,0 +1,70 @@
+From 026e6d84df3f5e04297319da6fa586f1585bf534 Mon Sep 17 00:00:00 2001
+From: tag2-port <tag2@local>
+Date: Fri, 13 Nov 2026 13:35:19 +0900
+Subject: [PATCH 5/5] tag2-port: make_release.py --tag2-dir
+
+---
+ tag2-port/make_release.py | 32 +++++++++++++++++++++++---------
+ 1 file changed, 23 insertions(+), 9 deletions(-)
+
+diff --git a/tag2-port/make_release.py b/tag2-port/make_release.py
+index 92507a358..fc406d009 100644
+--- a/tag2-port/make_release.py
++++ b/tag2-port/make_release.py
+@@ -14,7 +14,7 @@ RPCS3 deps that windeployqt/CI produce) and turns it into a Tag2 install:
+   * optionally zips the result
+ 
+ Usage (Windows or Linux, Python 3.8+):
+-  python tag2-port/make_release.py --build C:\\rpcs3\\bin --tag2-zip Tag2_Integrated_R20.zip
++  python tag2-port/make_release.py --build C:\\rpcs3\\bin (--tag2-zip Tag2_Integrated_R20.zip | --tag2-dir r20-data)
+          [--sequence 21] [--zip Tag2_Port_R21.zip]
+ 
+ Nothing outside --build is modified. Existing green_rollback/*.txt files are kept.
+@@ -100,7 +100,9 @@ def safe_member(name):
+ def main():
+     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     ap.add_argument("--build", required=True, help="folder with rpcs3.exe and its deployed DLLs")
+-    ap.add_argument("--tag2-zip", required=True, help="original Tag2_Integrated_R20.zip")
++    src = ap.add_mutually_exclusive_group(required=True)
++    src.add_argument("--tag2-zip", help="original Tag2_Integrated_R20.zip")
++    src.add_argument("--tag2-dir", help="folder holding the same files as the R20 zip (patches/patch.yml, GREEN_GGPO_SIMPLE_3F/...)")
+     ap.add_argument("--sequence", type=int, default=21, help="release sequence number (default 21)")
+     ap.add_argument("--base", default="9b8974d32e73c897a5fcd6bdf69413ca7e436b01", help="upstream base commit")
+     ap.add_argument("--zip", help="also write the finished install as this zip")
+@@ -111,14 +113,26 @@ def main():
+         sys.exit(f"{build} has no rpcs3.exe")
+ 
+     # 1. Files from the old Tag2 release.
+-    with zipfile.ZipFile(a.tag2_zip) as z:
+-        names = {safe_member(n).as_posix(): n for n in z.namelist()}
++    if a.tag2_zip:
++        with zipfile.ZipFile(a.tag2_zip) as z:
++            names = {safe_member(n).as_posix(): n for n in z.namelist()}
++            payload = {}
++            for rel in FROM_TAG2_ZIP:
++                if rel not in names:
++                    sys.exit(f"{a.tag2_zip} does not contain {rel}")
++                payload[rel] = z.read(names[rel])
++    else:
++        src_dir = pathlib.Path(a.tag2_dir)
++        payload = {}
+         for rel in FROM_TAG2_ZIP:
+-            if rel not in names:
+-                sys.exit(f"{a.tag2_zip} does not contain {rel}")
+-            dst = build / rel
+-            dst.parent.mkdir(parents=True, exist_ok=True)
+-            dst.write_bytes(z.read(names[rel]))
++            p = src_dir / rel
++            if not p.is_file():
++                sys.exit(f"{src_dir} does not contain {rel}")
++            payload[rel] = p.read_bytes()
++    for rel, data in payload.items():
++        dst = build / rel
++        dst.parent.mkdir(parents=True, exist_ok=True)
++        dst.write_bytes(data)
+ 
+     # 2. Defaults that must never overwrite a user's choice.
+     for rel, data in DEFAULTS.items():
+-- 
+2.43.0
+

@@ -1,0 +1,26 @@
+From aa5c71fdeb650540e6039eea5e70c3ac66cae6c7 Mon Sep 17 00:00:00 2001
+From: tag2-port <tag2@local>
+Date: Fri, 13 Nov 2026 13:28:35 +0900
+Subject: [PATCH 4/5] tag2-port: README git am --keep-cr
+
+---
+ tag2-port/README_KO.md | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/tag2-port/README_KO.md b/tag2-port/README_KO.md
+index ecd741a59..e7f39ff06 100644
+--- a/tag2-port/README_KO.md
++++ b/tag2-port/README_KO.md
+@@ -34,7 +34,8 @@ git clone https://github.com/RPCS3/rpcs3.git
+ cd rpcs3
+ git checkout 9b8974d32e73c897a5fcd6bdf69413ca7e436b01
+ git submodule update --init --recursive
+-git am C:\path\to\patches\*.patch
++git am --keep-cr C:\path\to\patches\*.patch
++:: 또는: git apply C:\path\to\tag2_full.diff
+ ```
+ 
+ 1. `QTDIR` 환경변수를 `...\Qt\6.12.0\msvc2022_64`로 설정
+-- 
+2.43.0
+

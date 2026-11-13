@@ -1,0 +1,179 @@
+name: Build Tag2 (RPCS3 Windows)
+
+# Builds RPCS3 at RPCS3_REF with the Tag2 patches in port/patches applied,
+# then packages it with port/make_release.py.
+#  - Run manually from the Actions tab (workflow_dispatch), or
+#  - push a tag named port-* (e.g. port-r21) to also publish a GitHub release.
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_dispatch:
+    inputs:
+      rpcs3_ref:
+        description: "RPCS3 commit to build on (patches are made for this one)"
+        default: "9b8974d32e73c897a5fcd6bdf69413ca7e436b01"
+        required: true
+      sequence:
+        description: "Tag2 release sequence number"
+        default: "21"
+        required: true
+  push:
+    tags:
+      - "port-*"
+
+permissions:
+  contents: write
+
+env:
+  RPCS3_REF: ${{ github.event.inputs.rpcs3_ref || '9b8974d32e73c897a5fcd6bdf69413ca7e436b01' }}
+  SEQUENCE: ${{ github.event.inputs.sequence || '21' }}
+  # Values copied from RPCS3's own Windows CI at RPCS3_REF (.github/workflows/rpcs3.yml)
+  COMPILER: msvc
+  QT_VER_MAIN: '6'
+  QT_VER: '6.12.0'
+  QT_VER_MSVC: 'msvc2022'
+  QT_DATE: '202609280346'
+  LLVM_VER: '22.1.8'
+  VULKAN_VER: '1.4.341.1'
+  VULKAN_SDK_SHA: 'bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe'
+  CCACHE_SHA: '859141059ac950e1e8cd042c66f842f26b9e3a62a1669a69fe6ba180cb58bbdf'
+  CCACHE_BIN_DIR: 'C:\ccache_bin'
+  CCACHE_DIR: 'C:\ccache'
+  CCACHE_INODECACHE: 'true'
+  CCACHE_SLOPPINESS: 'time_macros'
+  CCACHE_MAXSIZE: '7G'
+  DEPS_CACHE_DIR: ./dependency_cache
+  BUILD_REPOSITORY_NAME: ${{ github.repository }}
+  BUILD_SOURCEBRANCHNAME: tag2-port
+  BUILD_SOURCEVERSION: ${{ github.sha }}
+  BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
+
+jobs:
+  windows:
+    name: RPCS3 + Tag2 (Windows, MSVC)
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 300
+    steps:
+      - name: Checkout Tag2 repository
+        uses: actions/checkout@v4
+        with:
+          path: tag2
+
+      - name: Checkout RPCS3
+        uses: actions/checkout@v4
+        with:
+          repository: RPCS3/rpcs3
+          ref: ${{ env.RPCS3_REF }}
+          path: rpcs3
+          fetch-depth: 0
+
+      - name: Apply Tag2 patches
+        working-directory: rpcs3
+        run: |
+          git config user.name "tag2-ci"
+          git config user.email "tag2-ci@users.noreply.github.com"
+          git am --keep-cr ../tag2/port/patches/*.patch
+          git log --oneline -8
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        working-directory: rpcs3
+        run: nuget restore rpcs3.sln
+
+      - name: Setup env
+        shell: pwsh
+        run: |
+          echo "QTDIR=C:\Qt\${{ env.QT_VER }}\${{ env.QT_VER_MSVC }}_64" >> $env:GITHUB_ENV
+          echo "VULKAN_SDK=C:\VulkanSDK\${{ env.VULKAN_VER }}" >> $env:GITHUB_ENV
+
+      - name: Get Cache Keys
+        working-directory: rpcs3
+        run: .ci/get_keys-windows.sh
+
+      - name: Restore Dependencies Cache
+        uses: actions/cache/restore@v4
+        id: restore-dependencies-cache
+        with:
+          path: rpcs3/dependency_cache
+          key: "${{ runner.os }}-${{ env.COMPILER }}-${{ env.QT_VER }}-${{ env.VULKAN_SDK_SHA }}-${{ env.CCACHE_SHA }}-${{ hashFiles('rpcs3/llvm.lock') }}"
+          restore-keys: ${{ runner.os }}-${{ env.COMPILER }}-
+
+      - name: Restore Build Ccache
+        uses: actions/cache/restore@v4
+        id: restore-build-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: "${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ github.run_id }}"
+          restore-keys: ${{ runner.os }}-ccache-${{ env.COMPILER }}-
+
+      - name: Download and unpack dependencies
+        working-directory: rpcs3
+        run: |
+          .ci/setup-windows.sh
+          .ci/setup-windows-ci-vars.sh win64 msvc
+
+      - name: Export Variables
+        working-directory: rpcs3
+        run: |
+          while IFS='=' read -r key val; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            echo "$key=$val" >> "$GITHUB_ENV"
+          done < .ci/ci-vars.env
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Compile RPCS3
+        working-directory: rpcs3
+        shell: pwsh
+        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\rpcs3\buildfiles\msvc\ci_only.targets"
+
+      - name: Save Build Ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-build-ccache.outputs.cache-primary-key }}
+
+      - name: Save Dependencies Cache
+        if: steps.restore-dependencies-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: rpcs3/dependency_cache
+          key: ${{ steps.restore-dependencies-cache.outputs.cache-primary-key }}
+
+      - name: Package Tag2 release
+        run: |
+          rm -f rpcs3/bin/rpcs3.exp rpcs3/bin/rpcs3.lib rpcs3/bin/rpcs3.pdb rpcs3/bin/vc_redist.x64.exe
+          mkdir -p rpcs3/bin/config/input_configs
+          curl -fsSL 'https://raw.githubusercontent.com/gabomdq/SDL_GameControllerDB/master/gamecontrollerdb.txt' -o rpcs3/bin/config/input_configs/gamecontrollerdb.txt || true
+          cp "tag2/r20-data/그래픽 설정 원복.cmd" rpcs3/bin/ || true
+          mkdir -p artifacts
+          NAME="Tag2_RPCS3_port_R${SEQUENCE}_$(git -C rpcs3 rev-parse --short=8 HEAD)"
+          echo "PKG_NAME=$NAME" >> "$GITHUB_ENV"
+          python tag2/port/make_release.py --build rpcs3/bin --tag2-dir tag2/r20-data --sequence "$SEQUENCE" --base "$RPCS3_REF" --zip "artifacts/$NAME.zip"
+          sha256sum "artifacts/$NAME.zip" | tee "artifacts/$NAME.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          path: artifacts/
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish GitHub release (port-* tags)
+        if: startsWith(github.ref, 'refs/tags/port-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "태그2 통합패치 최신 RPCS3 포팅판 ${GITHUB_REF_NAME}" \
+            --notes "RPCS3 ${RPCS3_REF} + Tag2 R20 포팅. 비공식 빌드입니다. 설치 방법은 README를 참고하세요." \
+            --prerelease

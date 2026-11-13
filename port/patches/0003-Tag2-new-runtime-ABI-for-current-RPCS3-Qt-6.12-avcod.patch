@@ -1,0 +1,433 @@
+From cff56044de8ee19239c16e56cc97c9080a2a212c Mon Sep 17 00:00:00 2001
+From: tag2-port <tag2@local>
+Date: Fri, 13 Nov 2026 13:28:19 +0900
+Subject: [PATCH 3/5] Tag2: new runtime ABI for current RPCS3 (Qt 6.12 /
+ avcodec-63), drop U1, disable old updater, add packaging tools
+
+- managed_paths follow the official RPCS3 Windows runtime; hashes come from TAG2_NATIVE/release.json
+- runtime_abi qt612-tag2-rpcs3-master (old qt6102 R6-R20 packages are rejected)
+- launch mode 1 (legacy rpcs3-u1.exe) refused with a clear message
+- GitHub auto-update disabled (upstream Tag2 channel targets the old 7cfe96a1 runtime)
+- tag2-port/make_release.py + README_KO.md
+---
+ rpcs3/rpcs3qt/tag2_native_package.cpp |   3 +-
+ rpcs3/rpcs3qt/tag2_native_package.h   |   4 +
+ rpcs3/rpcs3qt/tag2_native_panel.cpp   |   1 +
+ rpcs3/rpcs3qt/tag2_native_policy.inc  |  79 ++----------
+ tag2-port/README_KO.md                |  60 +++++++++
+ tag2-port/make_release.py             | 177 ++++++++++++++++++++++++++
+ 6 files changed, 254 insertions(+), 70 deletions(-)
+ create mode 100644 tag2-port/README_KO.md
+ create mode 100644 tag2-port/make_release.py
+
+diff --git a/rpcs3/rpcs3qt/tag2_native_package.cpp b/rpcs3/rpcs3qt/tag2_native_package.cpp
+index 8327432b8..72eb61636 100644
+--- a/rpcs3/rpcs3qt/tag2_native_package.cpp
++++ b/rpcs3/rpcs3qt/tag2_native_package.cpp
+@@ -18,7 +18,7 @@ QSet<QString> allowed_files(){auto p=managed_paths;p.insert(manifest_path);retur
+ bool permitted(const QString& p){return managed_paths.contains(p)||p==manifest_path;}
+ Package parse_package(const QByteArray& bytes){
+  const auto j=strict_json(bytes);const int sequence=j["sequence"].toInt(-1);
+- if(j["schema"].toInt()!=2||sequence<6||j["runtime_abi"]!="qt6102-tag2-rpcs3-r6"||!j["files"].isArray())throw Failure("Unsupported native launcher release");
++ if(j["schema"].toInt()!=2||sequence<6||j["runtime_abi"]!=runtime_abi||!j["files"].isArray())throw Failure("Unsupported native launcher release");
+  static const QRegularExpression release("^TAG2-RPCS3-[0-9]{8}-R[0-9]+$"),sha("^[0-9a-f]{64}$");
+  if(!release.match(j["release_id"].toString()).hasMatch()||!j["release_id"].toString().endsWith("-R"+QString::number(sequence)))throw Failure("Invalid native release identity");
+  Package p{sequence,j["release_id"].toString(),{},j};QSet<QString> seen;
+@@ -50,6 +50,7 @@ void verify_installed(const QString& root,const Package& p){
+ void verify_launch(const QString& root,const Package& p,int mode){
+  if(update_in_progress())throw Failure(launch_blocked_message());
+  if(mode<1||mode>3)throw Failure("Invalid launch mode");
++ if(mode==1)throw Failure(QString::fromUtf8("이 빌드(최신 RPCS3 포팅판)는 구 U1 실행기를 지원하지 않습니다. rpcs3.exe의 딜레이/롤백 모드를 사용해 주세요."));
+  verify_patch_files(root);
+  for(const QString& pending:{".tag2-native/pending.json",".tag2-native/frames/pending.json",".tag2-update/pending.json",".tag2-update/online-pending.json",".green-online-backups/u1-base-20261102/active.json"})
+   if(QFileInfo::exists(safe_path(root,pending)))throw Failure("Recovery pending");
+diff --git a/rpcs3/rpcs3qt/tag2_native_package.h b/rpcs3/rpcs3qt/tag2_native_package.h
+index 4bdf048ee..c1c597a06 100644
+--- a/rpcs3/rpcs3qt/tag2_native_package.h
++++ b/rpcs3/rpcs3qt/tag2_native_package.h
+@@ -3,6 +3,10 @@
+ #include <QList>
+ namespace tag2 {
+ inline constexpr const char* manifest_path="TAG2_NATIVE/release.json";
++// Runtime of the port to current RPCS3 master (Qt 6.12 / FFmpeg avcodec-63). Old R6-R20 packages (qt6102) are rejected.
++inline constexpr const char* runtime_abi="qt612-tag2-rpcs3-master";
++// The upstream Tag2 GitHub releases target the old 7cfe96a1 runtime; installing them here would downgrade RPCS3.
++inline constexpr bool online_updates_enabled=false;
+ inline constexpr const char* stable_u1="93880296386cb71889d162a7aa85381f57f48b60bed1cc874adb4785915d6ded";
+ struct Entry{QString path,hash,policy;};
+ struct Package{int sequence=0;QString release;QList<Entry> entries;QJsonObject json;};
+diff --git a/rpcs3/rpcs3qt/tag2_native_panel.cpp b/rpcs3/rpcs3qt/tag2_native_panel.cpp
+index 22d4aaac6..bad2886ac 100644
+--- a/rpcs3/rpcs3qt/tag2_native_panel.cpp
++++ b/rpcs3/rpcs3qt/tag2_native_panel.cpp
+@@ -105,6 +105,7 @@ bool NativePanel::continue_rollback(){
+ }
+ void NativePanel::check_now(bool manual_update){
+  if(working||checking||closing||operation)return;
++ if(!online_updates_enabled){checked=true;update={};show_error(QString::fromUtf8("최신 RPCS3 포팅 빌드 · 자동 업데이트 꺼짐 · 실행하실 수 있습니다."));return;}
+  if(hooks.stopped&&!hooks.stopped()){show_error(QString::fromUtf8("게임을 종료한 뒤 업데이트해 주세요."));return;}
+  QPointer<NativePanel> self(this);checking=true;cancelled=false;manual=manual_update;
+  operation=std::make_shared<LaunchGuard>();auto work=operation;
+diff --git a/rpcs3/rpcs3qt/tag2_native_policy.inc b/rpcs3/rpcs3qt/tag2_native_policy.inc
+index f0004c1ac..ff419c64f 100644
+--- a/rpcs3/rpcs3qt/tag2_native_policy.inc
++++ b/rpcs3/rpcs3qt/tag2_native_policy.inc
+@@ -1,3 +1,7 @@
++// Tag2 port to current RPCS3 master: runtime = official RPCS3 Windows deps (Qt 6.12, FFmpeg avcodec-63).
++// The legacy U1 delay engine (rpcs3-u1.exe, Qt 6.10.2/FFmpeg 7.1 runtime) cannot share this folder and is not managed.
++// Hashes are not pinned in code: TAG2_NATIVE/release.json (generated after the build by tag2-port/make_release_manifest.py)
++// records the exact files of each build, and the GitHub auto-updater is disabled in this build.
+ static const QSet<QString> managed_paths = {
+ QStringLiteral("GREEN_GGPO_SIMPLE_3F/release.json"),
+ QStringLiteral("GREEN_GGPO_SIMPLE_3F/release_pin.py"),
+@@ -11,13 +15,11 @@ QStringLiteral("Qt6Svg.dll"),
+ QStringLiteral("Qt6SvgWidgets.dll"),
+ QStringLiteral("Qt6Widgets.dll"),
+ QStringLiteral("TAG2_NATIVE/NOTICE.txt"),
+-QStringLiteral("avcodec-61.dll"),
+-QStringLiteral("avformat-61.dll"),
+-QStringLiteral("avutil-59.dll"),
++QStringLiteral("avcodec-63.dll"),
++QStringLiteral("avformat-63.dll"),
++QStringLiteral("avutil-61.dll"),
+ QStringLiteral("green_rollback/framedata_enabled.txt"),
+ QStringLiteral("green_rollback/rollback_frames.txt"),
+-QStringLiteral("icuuc.dll"),
+-QStringLiteral("opencv_world4120.dll"),
+ QStringLiteral("qt6/plugins/generic/qtuiotouchplugin.dll"),
+ QStringLiteral("qt6/plugins/iconengines/qsvgicon.dll"),
+ QStringLiteral("qt6/plugins/imageformats/qgif.dll"),
+@@ -49,6 +51,7 @@ QStringLiteral("qt6/translations/qt_hu.qm"),
+ QStringLiteral("qt6/translations/qt_it.qm"),
+ QStringLiteral("qt6/translations/qt_ja.qm"),
+ QStringLiteral("qt6/translations/qt_ka.qm"),
++QStringLiteral("qt6/translations/qt_kk.qm"),
+ QStringLiteral("qt6/translations/qt_ko.qm"),
+ QStringLiteral("qt6/translations/qt_lg.qm"),
+ QStringLiteral("qt6/translations/qt_lv.qm"),
+@@ -63,71 +66,9 @@ QStringLiteral("qt6/translations/qt_tr.qm"),
+ QStringLiteral("qt6/translations/qt_uk.qm"),
+ QStringLiteral("qt6/translations/qt_zh_CN.qm"),
+ QStringLiteral("qt6/translations/qt_zh_TW.qm"),
+-QStringLiteral("rpcs3-u1.exe"),
+ QStringLiteral("rpcs3.exe"),
+-QStringLiteral("swresample-5.dll"),
+-QStringLiteral("swscale-8.dll"),
++QStringLiteral("swresample-7.dll"),
++QStringLiteral("swscale-10.dll"),
+ };
+ static const QMap<QString,QString> runtime_pins = {
+-{QStringLiteral("Qt6Concurrent.dll"),QStringLiteral("b898ad12608e243eaa4cc0161cf06ecf4e16b8f20feb76cc3813d2cd9d87416c")},
+-{QStringLiteral("Qt6Core.dll"),QStringLiteral("b98eea394a95563879b614dbd4432ce074b0fceeb154c3bae252f4e7a9376a40")},
+-{QStringLiteral("Qt6Gui.dll"),QStringLiteral("28ca8b9e7d3d1c4e3cfafd6fe63877a05cf10202a240134a11f98384f01c9e37")},
+-{QStringLiteral("Qt6Multimedia.dll"),QStringLiteral("97dbc2efc2dcc84ac8d6af1e7e6c4fcb23f8280af888a59d8667668c6b163416")},
+-{QStringLiteral("Qt6MultimediaWidgets.dll"),QStringLiteral("09fc6bd1dab4bd48fece8603ab0143e6e2af5af839b5b1af26970e3b35cf57ff")},
+-{QStringLiteral("Qt6Network.dll"),QStringLiteral("905e1ce3947fadaad566b6deffe345daf7f6efbc57207ea7fcdbfa77669e3de6")},
+-{QStringLiteral("Qt6Svg.dll"),QStringLiteral("982a589e52680d7b525da0031eba783d3bbd77e6611cdea5cd276a2b9213f4c9")},
+-{QStringLiteral("Qt6SvgWidgets.dll"),QStringLiteral("80bdaed296c64fb72e63969eb2e0a6a177ae12a49afa2421a59f8cd857a8d3f2")},
+-{QStringLiteral("Qt6Widgets.dll"),QStringLiteral("f383fb6b3f6996efe23327ff607e7298fc47ee76e8b8ef8a65f8d2e0a91707e4")},
+-{QStringLiteral("avcodec-61.dll"),QStringLiteral("e419ac581dd7317dc49b54349827db26e479bc71a71fe7af7529086aa6fa7f60")},
+-{QStringLiteral("avformat-61.dll"),QStringLiteral("570fe624961878fa08611335fe7f92b7ab898013e16ddb000e63dc7be1d6cd1b")},
+-{QStringLiteral("avutil-59.dll"),QStringLiteral("c53a43cc7f15cf36e2143240302f2dcf0c10c9236e41ef6aba488d3986e90c96")},
+-{QStringLiteral("icuuc.dll"),QStringLiteral("e76201d65fc58d1db0ec99bc8e875f47d692bcaa16bb6448b197bc86c08d1816")},
+-{QStringLiteral("opencv_world4120.dll"),QStringLiteral("e86756bd0cdb3da94107657105d13c3a63a090ccbaee255e3867ab38d38327c9")},
+-{QStringLiteral("qt6/plugins/generic/qtuiotouchplugin.dll"),QStringLiteral("bf4efd69f22ad7b3f3bb79979e9fdef4182ef782e7ab2c4b80e6656bbe33e363")},
+-{QStringLiteral("qt6/plugins/iconengines/qsvgicon.dll"),QStringLiteral("6221fed44f0f560a864312553c6918a536b8e2f04c7cb4e8ee5ba9445338aa96")},
+-{QStringLiteral("qt6/plugins/imageformats/qgif.dll"),QStringLiteral("4fe24916a961587173c846055a34735b904900fb75716de4fa458c203da3e7ef")},
+-{QStringLiteral("qt6/plugins/imageformats/qico.dll"),QStringLiteral("0d79934047e06591b74201d826af72f6ab595f5df4705ad7f0c234c0e2cf3a32")},
+-{QStringLiteral("qt6/plugins/imageformats/qjpeg.dll"),QStringLiteral("004f456d513a6bfc58320652c326a023fa8fea905d26b642a561f7081442aff0")},
+-{QStringLiteral("qt6/plugins/imageformats/qsvg.dll"),QStringLiteral("b34f721be6e1a451a2eea3c146b0808091577143587d9e6bc689fe8214ff47d7")},
+-{QStringLiteral("qt6/plugins/multimedia/ffmpegmediaplugin.dll"),QStringLiteral("f9b77081dbe6557a89057735a0c7d8ed7268b6d60d9794b2890db55703a98fe1")},
+-{QStringLiteral("qt6/plugins/multimedia/windowsmediaplugin.dll"),QStringLiteral("049dbe8d45cdc3dcff82a6705da61fccf1022f162bd982224bcb81144bf02b13")},
+-{QStringLiteral("qt6/plugins/networkinformation/qnetworklistmanager.dll"),QStringLiteral("2f76ab1699bf9a1ef89404d054dc7325c4e18d4d27f52cd3ca3b5088d944eb18")},
+-{QStringLiteral("qt6/plugins/platforms/qwindows.dll"),QStringLiteral("540211565db496024246cb8a44437212e6b967f3ee7b899e888f41cc556bf041")},
+-{QStringLiteral("qt6/plugins/styles/qmodernwindowsstyle.dll"),QStringLiteral("f9ddcd6f6319be76ec8ea1b95e6829cdc0f9600242b6bdd07babb0185e9762ab")},
+-{QStringLiteral("qt6/plugins/tls/qcertonlybackend.dll"),QStringLiteral("584392e25d46b6edc255e4c5849920da3e52c01172199def876284525587bb05")},
+-{QStringLiteral("qt6/plugins/tls/qschannelbackend.dll"),QStringLiteral("4632404cb87f860e7bb811f525685509127da8d05f398aada5b2b88318e4a621")},
+-{QStringLiteral("qt6/translations/qt_ar.qm"),QStringLiteral("584e5bc03a6305a1dc27a389cd089e9e14322b97d9405f6ad28e636bb5f4e0a2")},
+-{QStringLiteral("qt6/translations/qt_bg.qm"),QStringLiteral("e4d7b5ccef9ef3f81f71c55e1bf1c251c6536205eeeca6bff4e5673b9979d196")},
+-{QStringLiteral("qt6/translations/qt_ca.qm"),QStringLiteral("a1a3d268fc945b52e4830bdd9d0ce20a06cfa97919cb3530949a1a27925137bd")},
+-{QStringLiteral("qt6/translations/qt_cs.qm"),QStringLiteral("b1078601807d3938c6acfa1cd0c762094fa76c2d276cda61c910fc0b643708db")},
+-{QStringLiteral("qt6/translations/qt_da.qm"),QStringLiteral("a41adddb5acc3f706199820377db8ae3da85472362a3eeac46988decbfad5c0d")},
+-{QStringLiteral("qt6/translations/qt_de.qm"),QStringLiteral("eca2d86f42ce0be2bd7976dea45ed040e831d211cc9dc5b4a941bc740b693640")},
+-{QStringLiteral("qt6/translations/qt_en.qm"),QStringLiteral("494ac9a2b2cb2fdeced353f4a9f898ed8dcf616e9bc667438c62681e3f7f79cf")},
+-{QStringLiteral("qt6/translations/qt_es.qm"),QStringLiteral("09d1dc1036c759f888dfdbd907891064f2a4cc906cc09191aa0dcf956442080a")},
+-{QStringLiteral("qt6/translations/qt_fa.qm"),QStringLiteral("5c35f429393de7dd58a7822820aa556ef6cebc80a0f10775c776c52cb76d4b72")},
+-{QStringLiteral("qt6/translations/qt_fi.qm"),QStringLiteral("40f1b47e8dbf31ea1065276e19bff1a9ef65d290972c06a723f43c3fcac9e25d")},
+-{QStringLiteral("qt6/translations/qt_fr.qm"),QStringLiteral("7d89baeb26f17ea54cdd34e0bdff5bb485df346e2c1988b727fa69d232abd47d")},
+-{QStringLiteral("qt6/translations/qt_gd.qm"),QStringLiteral("63b439dd44139aa3aed54c2ebe03fa9bc77f22c14ed8fba8eff2608445bb233d")},
+-{QStringLiteral("qt6/translations/qt_he.qm"),QStringLiteral("e1ebca16afe8994356f81ca007fbdb9ddf865842010fe908923d873b687cad3f")},
+-{QStringLiteral("qt6/translations/qt_hr.qm"),QStringLiteral("a0e47524986a2bd5c363d1eaca3f0e1650d2951e7dc46ff9359632fb20be1db9")},
+-{QStringLiteral("qt6/translations/qt_hu.qm"),QStringLiteral("1cc92456521831c07ed8ddf5bf7952f04c2b956ef2a570a62915a6b0d031dfc6")},
+-{QStringLiteral("qt6/translations/qt_it.qm"),QStringLiteral("66c3b4928769d10154dd4e35522d50526acf9ba3ce83154796d7517539b865c7")},
+-{QStringLiteral("qt6/translations/qt_ja.qm"),QStringLiteral("66c03b5f56ade65ea254fc9b1a830ae0217ea4374d0ff63fd2eeaa05c71d3e87")},
+-{QStringLiteral("qt6/translations/qt_ka.qm"),QStringLiteral("7549c6f265a5a43b07e8387325d809add6eedfd14628a544e0f6027e40632834")},
+-{QStringLiteral("qt6/translations/qt_ko.qm"),QStringLiteral("eceb6da6842a37525280f2835fe739f3bd2cb4846dd2dc8b78255179fb30eefa")},
+-{QStringLiteral("qt6/translations/qt_lg.qm"),QStringLiteral("31c0cc4ce13b1d74fe0c19ed0b47638fb31e20c93ee08092533e884007aebfb5")},
+-{QStringLiteral("qt6/translations/qt_lv.qm"),QStringLiteral("846e047573ae40c83671c3ba7f73e27efc24b98c82701da0df9973e574178bb2")},
+-{QStringLiteral("qt6/translations/qt_nl.qm"),QStringLiteral("36e61a7c2c32520c3229e7d6be14ce2d73a7897d37daa67be0f3427fe1f1513c")},
+-{QStringLiteral("qt6/translations/qt_nn.qm"),QStringLiteral("ef1e0ddc599caa5e88aaf3e3203466e49d2dcd76ec7c2beaada39fd093fa21ee")},
+-{QStringLiteral("qt6/translations/qt_pl.qm"),QStringLiteral("3f589cec79009b5cd917100ff683c2489f8590b99099e37ebe22b7230ba12048")},
+-{QStringLiteral("qt6/translations/qt_pt_BR.qm"),QStringLiteral("f55e546367c9f4a6336a86bcd30830c29cc0d481de563f8481ddd129cee07418")},
+-{QStringLiteral("qt6/translations/qt_ru.qm"),QStringLiteral("38cc4ddfa2aff7f59ddc91f0e61520151a48f91ec96cfce5c2532ae55d6d624f")},
+-{QStringLiteral("qt6/translations/qt_sk.qm"),QStringLiteral("ee21e65e92a8cb6df9a331cbcab9c3cf4bd56d8350370ad729514dd4e06da4f7")},
+-{QStringLiteral("qt6/translations/qt_sv.qm"),QStringLiteral("fa47e96443f492a0491b3bcba0298e6abe1478ae5827397308d3d8b3b223e850")},
+-{QStringLiteral("qt6/translations/qt_tr.qm"),QStringLiteral("2e08522da9e4797477c837cb27776fad0526aecd2f0e7433723bf14844c76ae0")},
+-{QStringLiteral("qt6/translations/qt_uk.qm"),QStringLiteral("c4cd5c7ec6ed3b1a444e967fc9dbc5faf2dab2ba709c1860d30ed0c94ff667b1")},
+-{QStringLiteral("qt6/translations/qt_zh_CN.qm"),QStringLiteral("76d78b7deef6ffecfab96d8bf5b847a5be8e9a6703083483edaaa39b29fb4681")},
+-{QStringLiteral("qt6/translations/qt_zh_TW.qm"),QStringLiteral("822163d1df063a87cdecec867c3d255175769c9f6d11497aaf8546652a7f648a")},
+-{QStringLiteral("swresample-5.dll"),QStringLiteral("b516d8e9428e5afc8304e7087a673ed0289e87aba5e00f78e52af2d6b54c655e")},
+-{QStringLiteral("swscale-8.dll"),QStringLiteral("e9a7f5342fa2b157c20ba2483397f6fecca0d46f6453d651c8f76dc7cd72fe7a")},
+ };
+diff --git a/tag2-port/README_KO.md b/tag2-port/README_KO.md
+new file mode 100644
+index 000000000..ecd741a59
+--- /dev/null
++++ b/tag2-port/README_KO.md
+@@ -0,0 +1,60 @@
++# 태그2 통합패치 R20 → 최신 RPCS3 포팅
++
++- 기준 RPCS3: `9b8974d32e73c897a5fcd6bdf69413ca7e436b01` (v0.0.40-20583, 2026-11-12 master)
++- 원본 패치: Tag2 Integrated R20 (`tag2-integrated-20261111-r20`, 기준 RPCS3 `7cfe96a1`, 2026-02-11)
++- 런타임: 공식 RPCS3와 동일 (Qt 6.12.0, FFmpeg avcodec-63), `runtime_abi = qt612-tag2-rpcs3-master`
++
++## 무엇이 바뀌었나
++
++| 항목 | 처리 |
++|---|---|
++| 롤백(GGPO)·로비·프레임표·HUD·입력·패치 매니저 등 태그2 전용 기능 | 최신 master 위로 그대로 이식 |
++| RSX 셰이더 인터프리터 백포트(PR #18676 등, 24개 파일) | 최신 master에 원본이 이미 포함 → 업스트림 코드 사용 |
++| Vulkan 디스크 파이프라인 캐시(태그2 기능) | 업스트림의 공유 파이프 컴파일러 캐시에 연결 (이중 해제 방지) |
++| 오버레이 폰트 API 변경 (`set_font(이름,크기)` → `set_font(크기,이름)`) | 태그2 HUD·로비 오버레이 2곳 수정 |
++| 설치 무결성 검사 | 유지. 관리 대상 DLL을 최신 구성으로 교체(avcodec-63 등), 해시는 빌드 후 `make_release.py`가 생성 |
++| 구 U1 딜레이 실행기 (`rpcs3-u1.exe`) | 제외 (구 Qt 6.10.2 DLL이 필요해 같은 폴더에서 동작 불가). rpcs3.exe의 딜레이/롤백 모드는 그대로 |
++| 태그2 GitHub 자동 업데이트 | 꺼짐 (구버전 R20으로 되돌아가는 것 방지) |
++| 공식 RPCS3 patch.yml 다운로드 | 원본처럼 계속 차단 (태그2 patch.yml 덮어쓰기 방지) |
++| patch.yml | 원본 R20 그대로. 패치 엔진 버전 1.2 동일, 포맷 호환 |
++| 기타 이식성 수정 | `0x1e+length` 리터럴, CMake 예외 플래그, GGPO `timeGetTime` 헤더 |
++
++## 검증한 범위
++
++- 머지 영향을 받은 기존 RPCS3 파일 (System.cpp, PPUModule, cellPad, PadHandler, pad_thread, bin_patch, VK 렌더러 등): 리눅스 GCC 13 실제 컴파일 통과
++- 태그2 윈도우 전용 소스 전체 (tag2_native_* 13개, GreenGGPO/Host, TTT2LobbyPass, ttt2_framedata, main_window/gs_frame의 태그2 블록): MinGW 헤더로 윈도우 타깃 문법·타입 검사 통과
++- **아직 안 한 것: MSVC 실제 빌드, 링크, 실게임 테스트(온라인 롤백 포함).** 반드시 실기 확인이 필요합니다.
++
++## 빌드 (Windows)
++
++공식 RPCS3 빌드 방법(`BUILDING.md`)과 같습니다. 필요한 것: Visual Studio 2022/2026, Python 3, Qt 6.12.0 (msvc2022_64, qtmultimedia 포함), Vulkan SDK 1.4.341.1.
++
++```bat
++git clone https://github.com/RPCS3/rpcs3.git
++cd rpcs3
++git checkout 9b8974d32e73c897a5fcd6bdf69413ca7e436b01
++git submodule update --init --recursive
++git am C:\path\to\patches\*.patch
++```
++
++1. `QTDIR` 환경변수를 `...\Qt\6.12.0\msvc2022_64`로 설정
++2. LLVM 미리 빌드된 라이브러리를 `build\lib_ext\Release-x64`에 풀기 (BUILDING.md 링크) — 또는 `__BUILD_BEFORE`의 `llvm_build` 먼저 빌드
++3. `rpcs3.sln` 열고 `Release` / `x64`로 `rpcs3` 빌드 → `bin\rpcs3.exe`
++4. 런타임 DLL은 같은 버전의 **공식 RPCS3 빌드 폴더**(예: `E:\RPCS3_test`)에서 `*.dll`과 `qt6\` 폴더를 `bin\`으로 복사하는 것이 가장 간단합니다 (Qt 6.12.0 / avcodec-63 동일).
++
++## 패키징
++
++```bat
++python tag2-port\make_release.py --build bin --tag2-zip Tag2_Integrated_R20.zip --zip Tag2_Port_R21.zip
++```
++
++- R20 zip에서 `patches\patch.yml`, `GREEN_GGPO_SIMPLE_3F\*`를 가져오고
++- `green_rollback\` 기본값(프레임표 OFF, 롤백 3프레임)을 만들고
++- `TAG2_NATIVE\release.json`(관리 파일 66개 해시)과 `NOTICE.txt`를 생성합니다.
++- 관리 대상 DLL이 빠져 있으면 목록을 보여주고 중단합니다.
++
++## 설치 시 주의
++
++- 게임 실행 시 `patches\patch.yml`과 `config\patch_config.yml`이 둘 다 있어야 합니다. 새 폴더라면 RPCS3 → 게임 패치 관리에서 원하는 항목을 체크하고 **저장**하면 `patch_config.yml`이 생깁니다.
++- 기존 R20 설치 폴더에 덮어쓰면 런처가 구 U1/GGPO 실행기를 백업 후 정리합니다 (원본 R18+ 동작).
++- 그래픽 설정 원복(`--tag2-graphics-restore`), 프레임표 설치 기능은 그대로 있습니다.
+diff --git a/tag2-port/make_release.py b/tag2-port/make_release.py
+new file mode 100644
+index 000000000..92507a358
+--- /dev/null
++++ b/tag2-port/make_release.py
+@@ -0,0 +1,177 @@
++#!/usr/bin/env python3
++"""Package a Tag2 port build for the current RPCS3 master.
++
++Takes a folder that already holds a working RPCS3 Windows build (rpcs3.exe built from
++this source tree plus the DLLs/qt6 folder deployed next to it, e.g. the official
++RPCS3 deps that windeployqt/CI produce) and turns it into a Tag2 install:
++
++  * copies GREEN_GGPO_SIMPLE_3F/* and patches/patch.yml from the old Tag2 R20 zip
++  * writes green_rollback defaults (frame display off, 3 rollback frames)
++  * writes TAG2_NATIVE/NOTICE.txt
++  * writes TAG2_NATIVE/release.json with the SHA-256 of every managed file
++    (the list is read from rpcs3/rpcs3qt/tag2_native_policy.inc so it always
++    matches what the launcher checks)
++  * optionally zips the result
++
++Usage (Windows or Linux, Python 3.8+):
++  python tag2-port/make_release.py --build C:\\rpcs3\\bin --tag2-zip Tag2_Integrated_R20.zip
++         [--sequence 21] [--zip Tag2_Port_R21.zip]
++
++Nothing outside --build is modified. Existing green_rollback/*.txt files are kept.
++"""
++import argparse
++import datetime
++import hashlib
++import json
++import pathlib
++import re
++import sys
++import zipfile
++
++ROOT = pathlib.Path(__file__).resolve().parent.parent
++POLICY = ROOT / "rpcs3" / "rpcs3qt" / "tag2_native_policy.inc"
++PACKAGE_H = ROOT / "rpcs3" / "rpcs3qt" / "tag2_native_package.h"
++MANIFEST = "TAG2_NATIVE/release.json"
++
++# Files taken verbatim from the original Tag2 R20 release zip.
++FROM_TAG2_ZIP = [
++    "GREEN_GGPO_SIMPLE_3F/release.json",
++    "GREEN_GGPO_SIMPLE_3F/release_pin.py",
++    "patches/patch.yml",
++]
++
++DEFAULTS = {
++    "green_rollback/framedata_enabled.txt": b"0\n",  # optional frame display off
++    "green_rollback/rollback_frames.txt": b"3\n",    # 3 / 5 / 8
++}
++
++NOTICE = """태그2 통합패치 — 최신 RPCS3 포팅판 (비공식)
++Unofficial modified RPCS3 build; not an official RPCS3 release.
++RPCS3 and this integration: GPL-2.0-only, except files carrying other licenses.
++Upstream: https://github.com/RPCS3/rpcs3
++Base commit: {base}
++Tag2 changes: Tag2 Integrated R20 (tag2-integrated-20261111-r20), rebased onto the commit above.
++Runtime: official RPCS3 Windows dependencies (Qt 6.12, FFmpeg avcodec-63), runtime_abi {abi}.
++Not included: the legacy U1 delay engine (rpcs3-u1.exe); rpcs3.exe keeps native delay and rollback modes.
++Automatic Tag2 updates are disabled in this build (the original update channel targets the old runtime).
++No games, firmware, decryption keys, accounts or save data are included.
++"""
++
++
++def policy_paths():
++    text = POLICY.read_text(encoding="utf-8")
++    block = text.split("managed_paths", 1)[1].split("};", 1)[0]
++    paths = re.findall(r'QStringLiteral\("([^"]+)"\)', block)
++    if not paths:
++        sys.exit("could not read managed_paths from " + str(POLICY))
++    return paths
++
++
++def runtime_abi():
++    m = re.search(r'runtime_abi\s*=\s*"([^"]+)"', PACKAGE_H.read_text(encoding="utf-8"))
++    if not m:
++        sys.exit("could not read runtime_abi from " + str(PACKAGE_H))
++    return m.group(1)
++
++
++def policy_of(path):
++    if path == "green_rollback/rollback_frames.txt":
++        return "frames"
++    if path == "green_rollback/framedata_enabled.txt":
++        return "if_missing"
++    return "replace"
++
++
++def sha256(path):
++    h = hashlib.sha256()
++    with open(path, "rb") as f:
++        for chunk in iter(lambda: f.read(1 << 20), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
++
++def safe_member(name):
++    p = pathlib.PurePosixPath(name)
++    if p.is_absolute() or ".." in p.parts:
++        sys.exit("unsafe path in zip: " + name)
++    return p
++
++
++def main():
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--build", required=True, help="folder with rpcs3.exe and its deployed DLLs")
++    ap.add_argument("--tag2-zip", required=True, help="original Tag2_Integrated_R20.zip")
++    ap.add_argument("--sequence", type=int, default=21, help="release sequence number (default 21)")
++    ap.add_argument("--base", default="9b8974d32e73c897a5fcd6bdf69413ca7e436b01", help="upstream base commit")
++    ap.add_argument("--zip", help="also write the finished install as this zip")
++    a = ap.parse_args()
++
++    build = pathlib.Path(a.build).resolve()
++    if not (build / "rpcs3.exe").is_file():
++        sys.exit(f"{build} has no rpcs3.exe")
++
++    # 1. Files from the old Tag2 release.
++    with zipfile.ZipFile(a.tag2_zip) as z:
++        names = {safe_member(n).as_posix(): n for n in z.namelist()}
++        for rel in FROM_TAG2_ZIP:
++            if rel not in names:
++                sys.exit(f"{a.tag2_zip} does not contain {rel}")
++            dst = build / rel
++            dst.parent.mkdir(parents=True, exist_ok=True)
++            dst.write_bytes(z.read(names[rel]))
++
++    # 2. Defaults that must never overwrite a user's choice.
++    for rel, data in DEFAULTS.items():
++        dst = build / rel
++        if not dst.exists():
++            dst.parent.mkdir(parents=True, exist_ok=True)
++            dst.write_bytes(data)
++
++    # 3. The legacy U1 engine cannot run with the new runtime DLLs.
++    u1 = build / "rpcs3-u1.exe"
++    if u1.exists():
++        print("note: rpcs3-u1.exe present; it is not managed by this release and needs the old Qt 6.10.2 runtime")
++
++    abi = runtime_abi()
++    (build / "TAG2_NATIVE").mkdir(exist_ok=True)
++    (build / "TAG2_NATIVE/NOTICE.txt").write_text(NOTICE.format(base=a.base, abi=abi), encoding="utf-8", newline="\n")
++
++    # 4. Manifest over exactly the managed set.
++    missing, files = [], []
++    for rel in sorted(policy_paths()):
++        p = build / rel
++        if not p.is_file():
++            missing.append(rel)
++            continue
++        files.append({"path": rel, "sha256": sha256(p), "policy": policy_of(rel)})
++    if missing:
++        print("These managed files are missing from the build folder:", file=sys.stderr)
++        for m in missing:
++            print("  " + m, file=sys.stderr)
++        print("Deploy the official RPCS3 runtime next to rpcs3.exe (copy the DLLs and qt6/ folder from an"
++              " official RPCS3 build of the same Qt/FFmpeg version) and run again.", file=sys.stderr)
++        sys.exit(1)
++
++    date = datetime.date.today().strftime("%Y%m%d")
++    manifest = {
++        "schema": 2,
++        "sequence": a.sequence,
++        "release_id": f"TAG2-RPCS3-{date}-R{a.sequence}",
++        "runtime_abi": abi,
++        "files": files,
++    }
++    out = build / MANIFEST
++    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
++    print(f"wrote {out} ({len(files)} files, {manifest['release_id']})")
++
++    if a.zip:
++        with zipfile.ZipFile(a.zip, "w", zipfile.ZIP_DEFLATED) as z:
++            for p in sorted(build.rglob("*")):
++                rel = p.relative_to(build).as_posix()
++                if p.is_file() and not rel.startswith(("config/", "dev_", "cache/", "log/", "games/", "savestates/")):
++                    z.write(p, rel)
++        print("wrote", a.zip)
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.43.0
+

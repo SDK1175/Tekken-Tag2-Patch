@@ -1,0 +1,1 @@
+MANIFEST_SHA256 = "a0adadaf5a71d529edb2d5e1bc293e07dfce0f873746e1a6aa589b846f4fbea8"
