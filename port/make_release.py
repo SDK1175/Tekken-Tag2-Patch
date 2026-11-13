@@ -28,9 +28,19 @@ import re
 import sys
 import zipfile
 
+# Patched RPCS3 source tree (where tag2_native_policy.inc lives). Defaults to the tree this
+# script sits in (rpcs3/tag2-port/make_release.py); override with --source.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-POLICY = ROOT / "rpcs3" / "rpcs3qt" / "tag2_native_policy.inc"
-PACKAGE_H = ROOT / "rpcs3" / "rpcs3qt" / "tag2_native_package.h"
+POLICY = PACKAGE_H = None
+
+
+def set_source(root):
+    global ROOT, POLICY, PACKAGE_H
+    ROOT = pathlib.Path(root).resolve()
+    POLICY = ROOT / "rpcs3" / "rpcs3qt" / "tag2_native_policy.inc"
+    PACKAGE_H = ROOT / "rpcs3" / "rpcs3qt" / "tag2_native_package.h"
+    if not POLICY.is_file() or not PACKAGE_H.is_file():
+        sys.exit(f"{ROOT} is not a Tag2-patched RPCS3 source tree (missing {POLICY.name}); pass --source <rpcs3 folder>")
 MANIFEST = "TAG2_NATIVE/release.json"
 
 # Files taken verbatim from the original Tag2 R20 release zip.
@@ -106,7 +116,9 @@ def main():
     ap.add_argument("--sequence", type=int, default=21, help="release sequence number (default 21)")
     ap.add_argument("--base", default="9b8974d32e73c897a5fcd6bdf69413ca7e436b01", help="upstream base commit")
     ap.add_argument("--zip", help="also write the finished install as this zip")
+    ap.add_argument("--source", default=str(ROOT), help="Tag2-patched RPCS3 source tree (default: the tree containing this script)")
     a = ap.parse_args()
+    set_source(a.source)
 
     build = pathlib.Path(a.build).resolve()
     if not (build / "rpcs3.exe").is_file():

@@ -158,7 +158,7 @@ jobs:
           mkdir -p artifacts
           NAME="Tag2_RPCS3_port_R${SEQUENCE}_$(git -C rpcs3 rev-parse --short=8 HEAD)"
           echo "PKG_NAME=$NAME" >> "$GITHUB_ENV"
-          python tag2/port/make_release.py --build rpcs3/bin --tag2-dir tag2/r20-data --sequence "$SEQUENCE" --base "$RPCS3_REF" --zip "artifacts/$NAME.zip"
+          python tag2/port/make_release.py --source rpcs3 --build rpcs3/bin --tag2-dir tag2/r20-data --sequence "$SEQUENCE" --base "$RPCS3_REF" --zip "artifacts/$NAME.zip"
           sha256sum "artifacts/$NAME.zip" | tee "artifacts/$NAME.zip.sha256"
 
       - name: Upload artifact
