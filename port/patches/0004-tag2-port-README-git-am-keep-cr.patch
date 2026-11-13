@@ -1,7 +1,7 @@
 From aa5c71fdeb650540e6039eea5e70c3ac66cae6c7 Mon Sep 17 00:00:00 2001
 From: tag2-port <tag2@local>
 Date: Fri, 13 Nov 2026 13:28:35 +0900
-Subject: [PATCH 4/5] tag2-port: README git am --keep-cr
+Subject: [PATCH 4/6] tag2-port: README git am --keep-cr
 
 ---
  tag2-port/README_KO.md | 3 ++-

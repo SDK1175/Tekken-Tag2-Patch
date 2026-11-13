@@ -50,6 +50,8 @@ env:
   BUILD_SOURCEBRANCHNAME: tag2-port
   BUILD_SOURCEVERSION: ${{ github.sha }}
   BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
+  # Same as RPCS3's own Windows build job: skip the unit test project
+  SKIP_RPCS3_TEST: 'true'
 
 jobs:
   windows:

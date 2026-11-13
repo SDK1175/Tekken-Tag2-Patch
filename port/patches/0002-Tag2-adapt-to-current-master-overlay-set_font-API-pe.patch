@@ -1,7 +1,7 @@
 From 2d9be47cf753e930031ebaf301e50f086ab38949 Mon Sep 17 00:00:00 2001
 From: tag2-port <tag2@local>
 Date: Fri, 13 Nov 2026 13:23:01 +0900
-Subject: [PATCH 2/5] Tag2: adapt to current master (overlay set_font API,
+Subject: [PATCH 2/6] Tag2: adapt to current master (overlay set_font API,
  persistent VK pipeline cache into pipe compiler, portability fixes)
 
 - set_font(name,size) -> set_font(size,name) for upstream overlay API change
