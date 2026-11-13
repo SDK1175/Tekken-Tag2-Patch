@@ -1,7 +1,7 @@
 From a94e0ec566eb58c6737e4e3e1b1445223c949887 Mon Sep 17 00:00:00 2001
 From: tag2-port <tag2@local>
 Date: Fri, 13 Nov 2026 16:11:33 +0900
-Subject: [PATCH 8/8] PPU: pre-install and LLVM-compile the TTT2 patch.yml
+Subject: [PATCH 8/9] PPU: pre-install and LLVM-compile the TTT2 patch.yml
  rollback payload
 
 The patch.yml rollback (3F/5F, 'R2' loader) copies a fixed, hash-checked payload

@@ -1,7 +1,7 @@
 From 38598fedaf40f362d1b56ca2471748363d638a42 Mon Sep 17 00:00:00 2001
 From: tag2 <tag2@local>
 Date: Fri, 13 Nov 2026 12:41:33 +0900
-Subject: [PATCH 1/8] Tag2 integrated R20 changes on top of 7cfe96a1
+Subject: [PATCH 1/9] Tag2 integrated R20 changes on top of 7cfe96a1
 
 ---
  3rdparty/ggpo_sync/LICENSE                    |   21 +

@@ -55,12 +55,12 @@ DEFAULTS = {
     "green_rollback/rollback_frames.txt": b"3\n",    # 3 / 5 / 8
 }
 
-NOTICE = """태그2 통합패치 — 최신 RPCS3 포팅판 (비공식)
+NOTICE = """태그2 통합패치 — 최신 RPCS3 대응판 (비공식)
 Unofficial modified RPCS3 build; not an official RPCS3 release.
 RPCS3 and this integration: GPL-2.0-only, except files carrying other licenses.
 Upstream: https://github.com/RPCS3/rpcs3
 Base commit: {base}
-Tag2 changes: Tag2 Integrated R20 (tag2-integrated-20261111-r20), rebased onto the commit above.
+Tag2 changes: Tag2 2026.11.13-07 (R22, tag2-20261113-07) cumulative changes, rebased onto the commit above.
 Runtime: official RPCS3 Windows dependencies (Qt 6.12, FFmpeg avcodec-63), runtime_abi {abi}.
 Not included: the legacy U1 delay engine (rpcs3-u1.exe); rpcs3.exe keeps native delay and rollback modes.
 Automatic Tag2 updates are disabled in this build (the original update channel targets the old runtime).
@@ -183,6 +183,8 @@ def main():
         "schema": 2,
         "sequence": a.sequence,
         "release_id": f"TAG2-RPCS3-{date}-R{a.sequence}",
+        # Shown in the Tag2 panel (R22+): YYYY.MM.DD-NN
+        "display_version": f"{date[:4]}.{date[4:6]}.{date[6:]}-{a.sequence:02d}",
         "runtime_abi": abi,
         "files": files,
     }

@@ -1,7 +1,7 @@
-# Tekken-Tag2-Patch — 태그2 통합패치 최신 RPCS3 포팅판
+# Tekken-Tag2-Patch — 태그2 통합패치 최신 RPCS3 대응판
 
 - 기준 RPCS3: `9b8974d32e73c897a5fcd6bdf69413ca7e436b01` (v0.0.40-20583, 2026-11-12 master)
-- 원본 패치: Tag2 Integrated R20 (`tag2-integrated-20261111-r20`, 기준 RPCS3 `7cfe96a1`, 2026-02-11)
+- 원본 패치: 태그2 2026.11.13-07 (R22, `tag2-20261113-07`, 기준 RPCS3 `7cfe96a1`, 2026-02-11)
 - 런타임: 공식 RPCS3와 동일 (Qt 6.12.0, FFmpeg avcodec-63), `runtime_abi = qt612-tag2-rpcs3-master`
 
 ## 무엇이 바뀌었나
@@ -31,9 +31,9 @@
 
 1. RPCS3 `9b8974d3`을 받아 `port/patches/*.patch`를 `git am --keep-cr`로 적용
 2. RPCS3 공식 윈도우 CI와 같은 방식(Qt 6.12.0, LLVM 22.1.8, Vulkan SDK 1.4.341.1, MSVC)으로 빌드
-3. `port/make_release.py`로 태그2 패키지 생성 → 아티팩트 `Tag2_RPCS3_port_R21_xxxxxxxx.zip`
+3. `port/make_release.py`로 태그2 패키지 생성 → 아티팩트 `Tag2_RPCS3-latest_R24_xxxxxxxx.zip`
 
-`port-r21` 같은 `port-*` 태그를 푸시하면 같은 빌드를 GitHub 릴리스(사전 릴리스)로도 올립니다.
+`latest-r24` 같은 `latest-*` 태그(또는 Run workflow의 release_tag 입력)를 푸시하면 같은 빌드를 GitHub 릴리스(사전 릴리스)로도 올립니다.
 첫 빌드는 1~2시간 걸리고, 이후에는 ccache 덕분에 빨라집니다.
 
 ## 저장소 구성
