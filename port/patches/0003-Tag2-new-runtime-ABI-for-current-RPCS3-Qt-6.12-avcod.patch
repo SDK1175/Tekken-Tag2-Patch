@@ -1,7 +1,7 @@
 From cff56044de8ee19239c16e56cc97c9080a2a212c Mon Sep 17 00:00:00 2001
 From: tag2-port <tag2@local>
 Date: Fri, 13 Nov 2026 13:28:19 +0900
-Subject: [PATCH 3/7] Tag2: new runtime ABI for current RPCS3 (Qt 6.12 /
+Subject: [PATCH 3/8] Tag2: new runtime ABI for current RPCS3 (Qt 6.12 /
  avcodec-63), drop U1, disable old updater, add packaging tools
 
 - managed_paths follow the official RPCS3 Windows runtime; hashes come from TAG2_NATIVE/release.json

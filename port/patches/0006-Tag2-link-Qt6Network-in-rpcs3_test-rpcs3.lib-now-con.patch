@@ -1,7 +1,7 @@
 From e07ce3ff9fd1f01efe97587923cd796029f97e1c Mon Sep 17 00:00:00 2001
 From: tag2-port <tag2@local>
 Date: Fri, 13 Nov 2026 14:56:02 +0900
-Subject: [PATCH 6/7] Tag2: link Qt6Network in rpcs3_test (rpcs3.lib now
+Subject: [PATCH 6/8] Tag2: link Qt6Network in rpcs3_test (rpcs3.lib now
  contains Tag2 network code)
 
 ---

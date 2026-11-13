@@ -1,0 +1,358 @@
+From a94e0ec566eb58c6737e4e3e1b1445223c949887 Mon Sep 17 00:00:00 2001
+From: tag2-port <tag2@local>
+Date: Fri, 13 Nov 2026 16:11:33 +0900
+Subject: [PATCH 8/8] PPU: pre-install and LLVM-compile the TTT2 patch.yml
+ rollback payload
+
+The patch.yml rollback (3F/5F, 'R2' loader) copies a fixed, hash-checked payload
+(0x2646 words) from each calloc cave into an alloc'd RWX region at run time and
+jumps there. Code written at run time is never compiled ahead of time, so every
+rollback hook ran through the PPU interpreter fallback (several calls per frame,
+more during resimulation).
+
+At startup (LLVM decoder, BLES01702 only) detect the loader, verify the payload
+hash exactly like the guest loader, copy the identical bytes to the destination
+if it is untouched, and compile it as an optional patch helper: entries are the
+far-jump targets, constant 'lis/addi; mtctr; bctrl' calls are followed, and code
+after every exit is tried until a fixpoint. Undecodable/unsupported words only
+stop that path (interpreter fallback remains), never abort boot.
+---
+ Utilities/ppu_patch.h        |   2 +
+ rpcs3/Emu/Cell/PPUThread.cpp | 263 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 261 insertions(+), 4 deletions(-)
+
+diff --git a/Utilities/ppu_patch.h b/Utilities/ppu_patch.h
+index f3b3286bc..a04e273c6 100644
+--- a/Utilities/ppu_patch.h
++++ b/Utilities/ppu_patch.h
+@@ -18,6 +18,8 @@ struct ppu_patch_block_registry_t
+         u32 addr = 0;
+         u32 size = 0;
+         std::string patch{};
++        std::vector<u32> entries{}; // Extra entry points (besides addr)
++        bool optional = false;      // Skip (keep interpreter fallback) instead of failing on unsupported code
+     };
+ 
+     std::vector<code_range> code_ranges{};
+diff --git a/rpcs3/Emu/Cell/PPUThread.cpp b/rpcs3/Emu/Cell/PPUThread.cpp
+index 491fe8e51..f5342b0bf 100644
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -4766,6 +4766,156 @@ extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_
+ 	exec_worker();
+ }
+ 
++// Tag2: the TTT2 patch.yml rollback ("R2" loader) ships one fixed payload inside each
++// calloc cave and copies it at run time into a separately alloc'd RWX region, then jumps
++// there. Run-time written code cannot be compiled ahead of time, so every hook call
++// (several per frame, more during resimulation) ran through the PPU interpreter fallback.
++// Install the identical, hash-verified bytes before compilation and compile them from the
++// cave's far-jump targets. The guest loader later rewrites the same bytes and verifies them.
++static void ppu_tag2_prepare_patch_payloads(std::vector<ppu_patch_block_registry_t::code_range>& ranges)
++{
++	struct payload { u32 dest, words, hash; std::vector<u32> entries; };
++	std::vector<payload> found;
++
++	const usz original_count = ranges.size();
++	for (usz r = 0; r < original_count; r++)
++	{
++		const auto range = ranges[r];
++		if (range.optional || range.size < 64 || !vm::check_addr(range.addr, vm::page_readable, range.size))
++		{
++			continue;
++		}
++
++		const u32 count = std::min<u32>(range.size / 4, 4096);
++		const auto word = [&](u32 i) -> u32 { return vm::read32(range.addr + i * 4); };
++
++		// Position-independent base: "bl +4; mflr r8; addi r8, r8, imm"
++		std::optional<u32> base;
++		for (u32 i = 0; i + 2 < count && !base; i++)
++		{
++			if (word(i) == 0x48000005u && word(i + 1) == 0x7d0802a6u && (word(i + 2) >> 16) == 0x3908u)
++			{
++				base = range.addr + (i + 1) * 4 + static_cast<s16>(word(i + 2) & 0xffff);
++			}
++		}
++
++		if (!base)
++		{
++			continue;
++		}
++
++		for (u32 i = 0; i + 30 < count; i++)
++		{
++			// ld r8,0x68(r1); addi r8,r8,src; lis r9,dst@h; ori r9,r9,dst@l;
++			// lis r10,0x100; ori r10,r10,0x193; lis r11,0x811c; ori r11,r11,0x9dc5; li r0,n; mtctr r0
++			if (word(i) != 0xe9010068u || (word(i + 1) >> 16) != 0x3908u || (word(i + 2) >> 16) != 0x3d20u ||
++				(word(i + 3) >> 16) != 0x6129u || word(i + 4) != 0x3d400100u || word(i + 5) != 0x614a0193u ||
++				word(i + 6) != 0x3d60811cu || word(i + 7) != 0x616b9dc5u || (word(i + 8) >> 16) != 0x3800u ||
++				word(i + 9) != 0x7c0903a6u)
++			{
++				continue;
++			}
++
++			std::optional<u32> expected;
++			for (u32 j = i + 10; j + 2 < std::min(count, i + 40); j++)
++			{
++				// stw r11,0x1c(r12); lis r10,hash@h; ori r10,r10,hash@l
++				if (word(j) == 0x916c001cu && (word(j + 1) >> 16) == 0x3d40u && (word(j + 2) >> 16) == 0x614au)
++				{
++					expected = (word(j + 1) << 16) | (word(j + 2) & 0xffff);
++					break;
++				}
++			}
++
++			const u32 src = *base + static_cast<s16>(word(i + 1) & 0xffff);
++			const u32 dest = (word(i + 2) << 16) | (word(i + 3) & 0xffff);
++			const u32 words = word(i + 8) & 0xffff;
++
++			if (!expected || !words || src < range.addr || u64{src} + words * 4 > u64{range.addr} + range.size ||
++				dest % 0x10 || !vm::check_addr(dest, vm::page_executable | vm::page_writable, words * 4))
++			{
++				break;
++			}
++
++			u32 hash = 0x811c9dc5u;
++			for (u32 k = 0; k < words; k++)
++			{
++				hash = (hash ^ vm::read32(src + k * 4)) * 0x01000193u;
++			}
++
++			if (hash != *expected)
++			{
++				ppu_log.warning("Tag2 rollback payload hash mismatch (cave 0x%x, 0x%08x != 0x%08x)", range.addr, hash, *expected);
++				break;
++			}
++
++			auto it = std::find_if(found.begin(), found.end(), [&](const payload& p) { return p.dest == dest; });
++			if (it == found.end())
++			{
++				// Only fill an untouched region or one already holding these exact bytes.
++				bool clean = true, same = true;
++				for (u32 k = 0; k < words; k++)
++				{
++					const u32 current = vm::read32(dest + k * 4);
++					clean = clean && current == 0;
++					same = same && current == vm::read32(src + k * 4);
++				}
++
++				if (!clean && !same)
++				{
++					ppu_log.warning("Tag2 rollback payload destination 0x%x is in use; leaving it to the guest loader", dest);
++					break;
++				}
++
++				std::memcpy(vm::get_super_ptr<u8>(dest), vm::get_super_ptr<u8>(src), words * 4);
++				found.push_back({dest, words, hash, {}});
++				it = found.end() - 1;
++			}
++			else if (it->words != words || it->hash != hash)
++			{
++				break;
++			}
++
++			break;
++		}
++	}
++
++	if (found.empty())
++	{
++		return;
++	}
++
++	if (g_fxo->is_init<ppu_far_jumps_t>())
++	{
++		auto& jumps = g_fxo->get<ppu_far_jumps_t>();
++		reader_lock lock(jumps.mutex);
++
++		for (const auto& [from, jump] : jumps.vals)
++		{
++			if (jump.with_toc || !jump.module_name.empty())
++			{
++				continue;
++			}
++
++			for (auto& p : found)
++			{
++				if (jump.target >= p.dest && jump.target < p.dest + p.words * 4 && jump.target % 4 == 0)
++				{
++					p.entries.push_back(jump.target);
++				}
++			}
++		}
++	}
++
++	for (auto& p : found)
++	{
++		std::sort(p.entries.begin(), p.entries.end());
++		p.entries.erase(std::unique(p.entries.begin(), p.entries.end()), p.entries.end());
++		ppu_log.success("Tag2 rollback payload pre-installed at 0x%x (%u words, hash 0x%08x, %u entries)", p.dest, p.words, p.hash, ::size32(p.entries));
++		ranges.push_back({p.dest, p.words * 4, fmt::format("Tag2 rollback payload 0x%08x", p.hash), std::move(p.entries), true});
++	}
++}
++
+ // Compile each startup calloc helper after validating its reachable instructions.
+ static void ppu_initialize_patch_helpers()
+ {
+@@ -4774,10 +4924,21 @@ static void ppu_initialize_patch_helpers()
+ 		return;
+ 	}
+ 
+-	const auto& ranges = g_fxo->get<ppu_patch_block_registry_t>().code_ranges;
++	auto& ranges = g_fxo->get<ppu_patch_block_registry_t>().code_ranges;
++
++	if (Emu.GetTitleID() == "BLES01702")
++	{
++		ppu_tag2_prepare_patch_payloads(ranges);
++	}
+ 
+-	for (const auto& [start, size, patch] : ranges)
++	for (const auto& range : ranges)
+ 	{
++		const u32 start = range.addr;
++		const u32 size = range.size;
++		const std::string& patch = range.patch;
++		bool unsupported = false;
++		bool stop_path = false;
++
+ 		if (Emu.IsStopped())
+ 		{
+ 			return;
+@@ -4826,9 +4987,47 @@ static void ppu_initialize_patch_helpers()
+ 
+ 		enqueue(start);
+ 
+-		for (usz i = 0; i < pending.size(); i++)
++		for (u32 extra : range.entries)
++		{
++			enqueue(extra);
++		}
++
++		// Tag2 payloads: "lis rS,hi; addi|ori rS,rS,lo; mtctr rS; bcctrl" calls a constant target.
++		const auto constant_ctr = [&](u32 pc) -> std::optional<u32>
++		{
++			if (pc < start + 8)
++			{
++				return std::nullopt;
++			}
++
++			const ppu_opcode_t mt{vm::read32(pc - 4)};
++			if ((mt.opcode & 0xfc1fffffu) != 0x7c0903a6u)
++			{
++				return std::nullopt;
++			}
++
++			const u32 reg = mt.rs;
++			std::optional<s32> low;
++			for (u32 at = pc - 8; at >= start && at + 32 >= pc; at -= 4)
++			{
++				const ppu_opcode_t op{vm::read32(at)};
++				if (op.rd != reg)
++				{
++					continue;
++				}
++
++				if (op.main == 14 && op.ra == reg && !low) { low = op.simm16; continue; } // addi
++				if (op.main == 24 && op.rs == reg && op.ra == reg && !low) { low = op.uimm16; continue; } // ori (rS/rA both reg)
++				if (op.main == 15 && op.ra == 0) { return static_cast<u32>(op.simm16 << 16) + static_cast<u32>(low.value_or(0)); } // lis
++				break;
++			}
++
++			return std::nullopt;
++		};
++
++		const auto analyze_from = [&](u32 first)
+ 		{
+-			for (u32 pc = pending[i]; pc < end; pc += 4)
++			for (u32 pc = first; pc < end; pc += 4)
+ 			{
+ 				auto& inst = instructions[(pc - start) / 4];
+ 				if (inst.flags & hook)
+@@ -4879,12 +5078,25 @@ static void ppu_initialize_patch_helpers()
+ 				case ppu_itype::MULLWO:
+ 				case ppu_itype::MULLWO_:
+ 				{
++					if (range.optional)
++					{
++						// Data or unsupported code: stop this path only; it keeps the interpreter fallback.
++						stop_path = true;
++						break;
++					}
++
+ 					fmt::throw_exception("Unsupported calloc instruction 0x%08x at 0x%x (helper 0x%x, patch '%s')",
+ 						op.opcode, pc, start, patch);
+ 				}
+ 				default: break;
+ 				}
+ 
++				if (stop_path)
++				{
++					stop_path = false;
++					break;
++				}
++
+ 				if (inst.flags & reachable)
+ 				{
+ 					break;
+@@ -4900,6 +5112,14 @@ static void ppu_initialize_patch_helpers()
+ 					enqueue((op.aa ? 0 : pc) + (type == ppu_itype::B ? +op.bt24 : +op.bt14));
+ 				}
+ 
++				if (range.optional && type == ppu_itype::BCCTR && op.lk)
++				{
++					if (const auto target = constant_ctr(pc))
++					{
++						enqueue(*target);
++					}
++				}
++
+ 				if (direct_branch || indirect_branch || exception)
+ 				{
+ 					// Calls, conditional branches and exceptions may resume at the next instruction.
+@@ -4910,7 +5130,42 @@ static void ppu_initialize_patch_helpers()
+ 					inst.flags |= exit;
+ 					break;
+ 				}
++				}
++		};
++
++		for (usz i = 0; i < pending.size() && !unsupported; i++)
++		{
++			analyze_from(pending[i]);
++		}
++
++		// Tag2 payloads are reached through computed branches as well; also start at every
++		// decodable instruction following an exit, until no new code is discovered.
++		while (range.optional)
++		{
++			const usz before = pending.size();
++			for (u32 k = 0; k + 1 < instructions.size(); k++)
++			{
++				if ((instructions[k].flags & exit) && !(instructions[k + 1].flags & (reachable | entry)))
++				{
++					enqueue(start + (k + 1) * 4);
++				}
+ 			}
++
++			if (pending.size() == before)
++			{
++				break;
++			}
++
++			for (usz i = before; i < pending.size(); i++)
++			{
++				analyze_from(pending[i]);
++			}
++		}
++
++		if (unsupported)
++		{
++			ppu_log.warning("Patch code at 0x%x (%s) contains instructions the LLVM translator cannot take; it keeps the interpreter fallback", start, patch);
++			continue;
+ 		}
+ 
+ 		ppu_module<lv2_obj> helper;
+-- 
+2.43.0
+

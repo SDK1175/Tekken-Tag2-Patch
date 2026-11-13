@@ -1,7 +1,7 @@
 From 6fa7225d4f5a27029cc642dd295b381dc15f0e5e Mon Sep 17 00:00:00 2001
 From: tag2-port <tag2@local>
 Date: Fri, 13 Nov 2026 15:23:57 +0900
-Subject: [PATCH 7/7] tag2-port: make_release.py --source
+Subject: [PATCH 7/8] tag2-port: make_release.py --source
 
 ---
  tag2-port/make_release.py | 16 ++++++++++++++--
