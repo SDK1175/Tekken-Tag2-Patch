@@ -55,7 +55,7 @@
 ## 로컬 빌드
 
 `port/patches`를 RPCS3 `9b8974d3` 체크아웃에 `git am --keep-cr`로 적용한 뒤 RPCS3 `BUILDING.md`대로 빌드하고,
-`python port/make_release.py --build <rpcs3\bin> --tag2-dir r20-data --zip out.zip`으로 패키징합니다.
+`python port/make_release.py --source <rpcs3> --build <rpcs3\bin> --tag2-dir r20-data --zip out.zip`으로 패키징합니다.
 
 ## 라이선스
 
